@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import { createHash } from "crypto";
@@ -148,7 +149,7 @@ export async function gameRoutes(server: FastifyInstance) {
       };
 
       // Persist spin + transactions atomically
-      const [spin] = await server.prisma.$transaction(async (tx) => {
+      const [spin] = await server.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // Deduct bet
         await tx.wallet.update({
           where: { id: wallet.id },

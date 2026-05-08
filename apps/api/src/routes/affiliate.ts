@@ -132,7 +132,7 @@ export async function affiliateRoutes(server: FastifyInstance) {
         const csv = [
           "amount,tier,sourceType,paidAt,createdAt",
           ...profile.commissions.map(
-            (c) =>
+            (c: (typeof profile.commissions)[number]) =>
               `${c.amount},${c.tier},${c.sourceType},${c.paidAt?.toISOString() ?? ""},${c.createdAt.toISOString()}`
           ),
         ].join("\n");

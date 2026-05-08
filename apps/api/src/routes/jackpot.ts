@@ -14,7 +14,7 @@ export async function jackpotRoutes(server: FastifyInstance) {
 
     // Merge with live Redis values for realtime accuracy
     const pools = await Promise.all(
-      dbPools.map(async (pool) => {
+      dbPools.map(async (pool: (typeof dbPools)[number]) => {
         const liveAmountStr = await server.redis.get(`jackpot:${pool.tier}`);
         const liveAmount = liveAmountStr
           ? Number(liveAmountStr)
