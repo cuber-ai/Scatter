@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+.next/
+out/
+build/
+target/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Rust build artifacts
+apps/game-server/target/
+packages/game-engine/target/
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Turbo cache
+.turbo/
+
+# Docker volumes
+docker/volumes/
+
+# Terraform state (use remote state in production)
+infrastructure/terraform/.terraform/
+infrastructure/terraform/*.tfstate
+infrastructure/terraform/*.tfstate.backup
+
+# Windows build artifacts
+apps/windows-client/dist/
+apps/windows-client/out/
+
+# Go build output
+apps/jackpot-service/main
+apps/jackpot-service/jackpot-service
+
+apps/ai-reward-engine/.venv/
+apps/ai-reward-engine/__pycache__/
+
+# Prisma generated files (regenerate with prisma generate)
+apps/api/node_modules/.prisma/
+
+# Kubernetes secrets (manage via sealed-secrets or external-secrets)
+infrastructure/k8s/secrets/
+
+# Upload artifacts
+uploads/
