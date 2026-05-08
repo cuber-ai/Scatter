@@ -1,0 +1,143 @@
+version: "3.9"
+
+# ── ScatterX Enterprise – Local Development ──────────────────────────────────
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: scatterx_dev
+      POSTGRES_USER: scatterx
+      POSTGRES_PASSWORD: changeme
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scatterx"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ../apps/api
+      dockerfile: ../../docker/api.Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://scatterx:changeme@postgres:5432/scatterx_dev
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      APP_PORT: 3001
+      GAME_SERVER_URL: http://game-server:9001
+      GAME_SERVER_API_KEY: ${GAME_SERVER_API_KEY}
+      JACKPOT_SERVICE_URL: http://jackpot-service:9000
+      JACKPOT_SERVICE_API_KEY: ${JACKPOT_SERVICE_API_KEY}
+      AI_ENGINE_URL: http://ai-reward-engine:8000
+      AI_ENGINE_API_KEY: ${AI_ENGINE_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  game-server:
+    build:
+      context: ../apps/game-server
+      dockerfile: ../../docker/game-server.Dockerfile
+    ports:
+      - "9001:9001"
+    environment:
+      GAME_SERVER_PORT: 9001
+      GAME_SERVER_API_KEY: ${GAME_SERVER_API_KEY}
+      RUST_LOG: info
+    restart: unless-stopped
+
+  jackpot-service:
+    build:
+      context: ../apps/jackpot-service
+      dockerfile: ../../docker/jackpot-service.Dockerfile
+    ports:
+      - "9000:9000"
+    environment:
+      JACKPOT_SERVICE_PORT: 9000
+      JACKPOT_SERVICE_API_KEY: ${JACKPOT_SERVICE_API_KEY}
+      REDIS_URL: redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ai-reward-engine:
+    build:
+      context: ../apps/ai-reward-engine
+      dockerfile: ../../docker/ai-reward-engine.Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379
+      AI_ENGINE_API_KEY: ${AI_ENGINE_API_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  realtime-gateway:
+    build:
+      context: ../apps/realtime-gateway
+      dockerfile: ../../docker/realtime-gateway.Dockerfile
+    ports:
+      - "3002:3002"
+    environment:
+      REDIS_URL: redis://redis:6379
+      SOCKET_IO_PORT: 3002
+      SOCKET_IO_CORS_ORIGIN: http://localhost:3000
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Observability stack (optional, comment out for minimal setup)
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    ports:
+      - "3004:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  grafana_data:

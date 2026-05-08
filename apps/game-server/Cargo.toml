@@ -1,0 +1,34 @@
+[package]
+name = "scatterx-game-server"
+version = "1.0.0"
+edition = "2021"
+description = "ScatterX deterministic slot game engine (Rust)"
+
+[[bin]]
+name = "game-server"
+path = "src/main.rs"
+
+[dependencies]
+actix-web = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+hmac = "0.12"
+rand = { version = "0.8", features = ["std_rng"] }
+rand_chacha = "0.3"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+env_logger = "0.11"
+dotenvy = "0.15"
+thiserror = "1"
+anyhow = "1"
+
+[dev-dependencies]
+actix-web = { version = "4", features = ["macros"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

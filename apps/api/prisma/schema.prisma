@@ -1,0 +1,436 @@
+// ScatterX Enterprise – Prisma Schema
+// Run: pnpm db:generate && pnpm db:migrate
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum Role {
+  PLAYER
+  VIP
+  AFFILIATE
+  MODERATOR
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum KycStatus {
+  PENDING
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum WalletType {
+  MAIN
+  BONUS
+  COMMISSION
+  JACKPOT_RESERVE
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  BET
+  WIN
+  BONUS
+  COMMISSION
+  REFUND
+  ADJUSTMENT
+}
+
+enum TransactionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+enum PaymentProvider {
+  GCASH
+  MAYA
+  STRIPE
+  PAYPAL
+  CRYPTO
+  INTERNAL
+}
+
+enum SpinStatus {
+  PENDING
+  RESOLVED
+  INVALID
+}
+
+enum JackpotTier {
+  MINI
+  MAJOR
+  MEGA
+  PROGRESSIVE
+}
+
+enum AffiliateRank {
+  BRONZE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+enum FraudAction {
+  NONE
+  FLAGGED
+  QUARANTINED
+  BANNED
+}
+
+enum RewardType {
+  FREE_SPINS
+  CASHBACK
+  DEPOSIT_MATCH
+  VIP_BOOST
+  JACKPOT_MULTIPLIER
+  TOURNAMENT_ENTRY
+  STREAK_BONUS
+}
+
+// ─── Core Models ────────────────────────────────────────────────────────────
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  passwordHash      String
+  username          String    @unique
+  role              Role      @default(PLAYER)
+  kycStatus         KycStatus @default(PENDING)
+  mfaEnabled        Boolean   @default(false)
+  mfaSecret         String?
+  passwordChangedAt DateTime?
+  lastLoginAt       DateTime?
+  lastLoginIp       String?
+  deviceFingerprint String?
+  isActive          Boolean   @default(true)
+  isBanned          Boolean   @default(false)
+  banReason         String?
+  fraudAction       FraudAction @default(NONE)
+  locale            String    @default("en")
+  timezone          String    @default("Asia/Manila")
+  region            String?   // luzon | visayas | mindanao
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  wallets           Wallet[]
+  spins             Spin[]
+  transactions      Transaction[]
+  sessions          PlayerSession[]
+  aiProfile         AiPlayerProfile?
+  affiliateProfile  AffiliateProfile?
+  affiliateRef      AffiliateReferral? @relation("referee")
+  rewards           PlayerReward[]
+  auditLogs         AuditLog[]
+
+  @@index([email])
+  @@index([username])
+  @@index([role])
+  @@index([createdAt])
+}
+
+model PlayerSession {
+  id          String   @id @default(cuid())
+  userId      String
+  token       String   @unique
+  ipAddress   String
+  userAgent   String
+  deviceId    String?
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ─── Wallet & Transactions ───────────────────────────────────────────────────
+
+model Wallet {
+  id           String     @id @default(cuid())
+  userId       String
+  type         WalletType
+  balance      Decimal    @default(0) @db.Decimal(18, 4)
+  currency     String     @default("PHP")
+  lockedAmount Decimal    @default(0) @db.Decimal(18, 4)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([userId, type, currency])
+  @@index([userId])
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  userId          String
+  walletId        String
+  type            TransactionType
+  status          TransactionStatus @default(PENDING)
+  amount          Decimal           @db.Decimal(18, 4)
+  currency        String            @default("PHP")
+  provider        PaymentProvider?
+  providerTxId    String?           @unique
+  idempotencyKey  String            @unique
+  metadata        Json?
+  fraudScore      Float?
+  amlScore        Float?
+  notes           String?
+  processedAt     DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id])
+  wallet          Wallet            @relation(fields: [walletId], references: [id])
+  spin            Spin?             @relation(fields: [spinId], references: [id])
+  spinId          String?
+
+  @@index([userId])
+  @@index([status])
+  @@index([provider])
+  @@index([createdAt])
+  @@index([idempotencyKey])
+}
+
+// ─── Game Engine ─────────────────────────────────────────────────────────────
+
+model GameConfig {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  rtp             Float    @default(96.0)  // Return to Player %
+  volatility      String   @default("medium") // low | medium | high
+  symbolWeights   Json     // { symbol_id: weight }
+  paylines        Json     // payline definitions
+  minBet          Decimal  @db.Decimal(10, 4)
+  maxBet          Decimal  @db.Decimal(10, 4)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  spins           Spin[]
+}
+
+model Spin {
+  id              String     @id @default(cuid())
+  userId          String
+  gameConfigId    String
+  betAmount       Decimal    @db.Decimal(18, 4)
+  currency        String     @default("PHP")
+  reelResult      Json       // deterministic outcome from Rust engine
+  winAmount       Decimal    @db.Decimal(18, 4) @default(0)
+  multiplier      Float      @default(1.0)
+  isBonusRound    Boolean    @default(false)
+  isJackpot       Boolean    @default(false)
+  jackpotTier     JackpotTier?
+  serverSeed      String     // server seed (revealed after spin)
+  clientSeed      String     // client-supplied seed
+  nonce           Int
+  serverSeedHash  String     // hash committed before spin
+  status          SpinStatus @default(PENDING)
+  replayHash      String     @unique // anti-replay
+  processedAt     DateTime?
+  createdAt       DateTime   @default(now())
+
+  user            User       @relation(fields: [userId], references: [id])
+  gameConfig      GameConfig @relation(fields: [gameConfigId], references: [id])
+  transactions    Transaction[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([replayHash])
+}
+
+// ─── Jackpot System ──────────────────────────────────────────────────────────
+
+model JackpotPool {
+  id              String      @id @default(cuid())
+  tier            JackpotTier @unique
+  currentAmount   Decimal     @db.Decimal(18, 4)
+  baseAmount      Decimal     @db.Decimal(18, 4) // reset-to-base value
+  contributionPct Float       @default(0.01)     // % of each bet contributed
+  currency        String      @default("PHP")
+  lastWonAt       DateTime?
+  lastWinnerId    String?
+  totalPaidOut    Decimal     @default(0) @db.Decimal(18, 4)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  wins            JackpotWin[]
+}
+
+model JackpotWin {
+  id           String      @id @default(cuid())
+  poolId       String
+  userId       String
+  spinId       String
+  amount       Decimal     @db.Decimal(18, 4)
+  tier         JackpotTier
+  paidAt       DateTime?
+  auditHash    String      @unique // immutable audit
+  createdAt    DateTime    @default(now())
+
+  pool         JackpotPool @relation(fields: [poolId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ─── AI Reward Engine ────────────────────────────────────────────────────────
+
+model AiPlayerProfile {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  churnRisk          Float    @default(0)
+  retentionScore     Float    @default(0)
+  rewardAffinity     Json?    // { free_spins: 0.8, cashback: 0.2, ... }
+  spendingMomentum   Float    @default(0)
+  vipPotential       Float    @default(0)
+  fraudProbability   Float    @default(0)
+  lastScoredAt       DateTime?
+  modelVersion       String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PlayerReward {
+  id          String     @id @default(cuid())
+  userId      String
+  type        RewardType
+  value       Decimal    @db.Decimal(18, 4)
+  metadata    Json?
+  expiresAt   DateTime?
+  claimedAt   DateTime?
+  isActive    Boolean    @default(true)
+  campaignId  String?
+  createdAt   DateTime   @default(now())
+
+  user        User       @relation(fields: [userId], references: [id])
+  campaign    RewardCampaign? @relation(fields: [campaignId], references: [id])
+
+  @@index([userId])
+  @@index([type])
+  @@index([expiresAt])
+}
+
+model RewardCampaign {
+  id          String     @id @default(cuid())
+  name        String
+  description String?
+  rewardType  RewardType
+  value       Decimal    @db.Decimal(18, 4)
+  conditions  Json       // targeting conditions
+  startAt     DateTime
+  endAt       DateTime
+  budget      Decimal?   @db.Decimal(18, 4)
+  spent       Decimal    @default(0) @db.Decimal(18, 4)
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  rewards     PlayerReward[]
+}
+
+// ─── Affiliate System ────────────────────────────────────────────────────────
+
+model AffiliateProfile {
+  id             String        @id @default(cuid())
+  userId         String        @unique
+  referralCode   String        @unique
+  rank           AffiliateRank @default(BRONZE)
+  commissionRate Float         @default(0.05)  // 5% base
+  totalEarned    Decimal       @default(0) @db.Decimal(18, 4)
+  pendingPayout  Decimal       @default(0) @db.Decimal(18, 4)
+  fraudScore     Float         @default(0)
+  isActive       Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  referrals      AffiliateReferral[]
+  commissions    AffiliateCommission[]
+}
+
+model AffiliateReferral {
+  id              String           @id @default(cuid())
+  affiliateId     String
+  refereeId       String           @unique
+  conversionValue Decimal?         @db.Decimal(18, 4)
+  convertedAt     DateTime?
+  fraudScore      Float            @default(0)
+  createdAt       DateTime         @default(now())
+
+  affiliate       AffiliateProfile @relation(fields: [affiliateId], references: [id])
+  referee         User             @relation("referee", fields: [refereeId], references: [id])
+
+  @@index([affiliateId])
+}
+
+model AffiliateCommission {
+  id           String           @id @default(cuid())
+  affiliateId  String
+  amount       Decimal          @db.Decimal(18, 4)
+  tier         Int              @default(1)  // 1=direct, 2=sub-affiliate
+  sourceType   String           // deposit | win
+  sourceTxId   String
+  paidAt       DateTime?
+  createdAt    DateTime         @default(now())
+
+  affiliate    AffiliateProfile @relation(fields: [affiliateId], references: [id])
+
+  @@index([affiliateId])
+  @@index([createdAt])
+}
+
+// ─── Audit & Compliance ──────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  adminId    String?
+  action     String
+  resource   String
+  resourceId String?
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model FraudEvent {
+  id          String      @id @default(cuid())
+  userId      String
+  eventType   String      // rate_limit | bot_detected | abnormal_win | vpn_detected
+  severity    String      // low | medium | high | critical
+  metadata    Json?
+  resolved    Boolean     @default(false)
+  resolvedBy  String?
+  createdAt   DateTime    @default(now())
+
+  @@index([userId])
+  @@index([eventType])
+  @@index([createdAt])
+}
