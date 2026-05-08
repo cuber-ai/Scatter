@@ -71,7 +71,8 @@ jobs:
           go-version: "1.22"
           cache-dependency-path: apps/jackpot-service/go.sum
       - name: Build
-        run: go build ./...
+        # Use -o /dev/null to avoid conflict with the existing cmd/ directory
+        run: go build -o /dev/null ./cmd
         working-directory: apps/jackpot-service
       - name: Test
         run: go test ./... -v

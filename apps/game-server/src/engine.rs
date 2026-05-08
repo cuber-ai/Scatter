@@ -1,11 +1,11 @@
 use crate::models::{SpinRequest, SpinResult, VerifyRequest, VerifyResult, WinningLine};
+use anyhow::{anyhow, Result};
 use hmac::{Hmac, Mac};
-use rand::SeedableRng;
 use rand::seq::SliceRandom;
+use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use anyhow::{Result, anyhow};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -14,21 +14,20 @@ const ROWS: usize = 3;
 
 // Symbol payout multipliers (symbol → [2-match, 3-match, 4-match, 5-match])
 const SYMBOL_PAYOUTS: &[(&str, [f64; 4])] = &[
-    ("wild",    [0.0, 50.0,  200.0, 1000.0]),
-    ("scatter", [0.0, 10.0,  50.0,  200.0]),
-    ("seven",   [0.0, 8.0,   40.0,  150.0]),
-    ("bar",     [0.0, 5.0,   20.0,  75.0]),
-    ("bell",    [0.0, 4.0,   15.0,  50.0]),
-    ("cherry",  [0.0, 2.0,   10.0,  30.0]),
-    ("lemon",   [0.0, 1.5,   6.0,   20.0]),
-    ("orange",  [0.0, 1.5,   6.0,   20.0]),
-    ("plum",    [0.0, 1.0,   4.0,   15.0]),
+    ("wild", [0.0, 50.0, 200.0, 1000.0]),
+    ("scatter", [0.0, 10.0, 50.0, 200.0]),
+    ("seven", [0.0, 8.0, 40.0, 150.0]),
+    ("bar", [0.0, 5.0, 20.0, 75.0]),
+    ("bell", [0.0, 4.0, 15.0, 50.0]),
+    ("cherry", [0.0, 2.0, 10.0, 30.0]),
+    ("lemon", [0.0, 1.5, 6.0, 20.0]),
+    ("orange", [0.0, 1.5, 6.0, 20.0]),
+    ("plum", [0.0, 1.0, 4.0, 15.0]),
 ];
 
 /// Derive a deterministic u64 seed from server_seed + client_seed + nonce
 fn derive_seed(server_seed: &str, client_seed: &str, nonce: u64) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(server_seed.as_bytes())
-        .expect("HMAC key error");
+    let mut mac = HmacSha256::new_from_slice(server_seed.as_bytes()).expect("HMAC key error");
     mac.update(format!("{}:{}", client_seed, nonce).as_bytes());
     let result = mac.finalize().into_bytes();
     let mut seed = [0u8; 32];
@@ -84,7 +83,7 @@ pub fn process_spin(req: &SpinRequest) -> Result<SpinResult> {
         if let Some(line_symbols) = extract_payline_symbols(&reel_result, payline) {
             if let Some((symbol, count)) = count_leading_matches(&line_symbols) {
                 if count >= 3 {
-                    let match_idx = (count - 2).min(3) as usize; // maps 3→0, 4→1, 5→2
+                    let match_idx = (count - 2).min(3); // maps 3→0, 4→1, 5→2
                     let mult = payout_map
                         .get(symbol.as_str())
                         .map(|p| p[match_idx])
@@ -117,22 +116,31 @@ pub fn process_spin(req: &SpinRequest) -> Result<SpinResult> {
     let jackpot_roll: f64 = {
         // Use a separate deterministic value from the same seed
         let mut hasher = Sha256::new();
-        hasher.update(format!("jackpot:{}:{}:{}", req.server_seed, req.client_seed, req.nonce).as_bytes());
+        hasher.update(
+            format!(
+                "jackpot:{}:{}:{}",
+                req.server_seed, req.client_seed, req.nonce
+            )
+            .as_bytes(),
+        );
         let hash = hasher.finalize();
         let val = u64::from_be_bytes(hash[..8].try_into().unwrap());
         val as f64 / u64::MAX as f64
     };
     let is_jackpot = jackpot_roll < jackpot_threshold;
     let jackpot_tier = if is_jackpot {
-        Some(if jackpot_roll < jackpot_threshold * 0.001 {
-            "PROGRESSIVE"
-        } else if jackpot_roll < jackpot_threshold * 0.01 {
-            "MEGA"
-        } else if jackpot_roll < jackpot_threshold * 0.1 {
-            "MAJOR"
-        } else {
-            "MINI"
-        }.to_string())
+        Some(
+            if jackpot_roll < jackpot_threshold * 0.001 {
+                "PROGRESSIVE"
+            } else if jackpot_roll < jackpot_threshold * 0.01 {
+                "MEGA"
+            } else if jackpot_roll < jackpot_threshold * 0.1 {
+                "MAJOR"
+            } else {
+                "MINI"
+            }
+            .to_string(),
+        )
     } else {
         None
     };
@@ -194,10 +202,7 @@ pub fn verify_spin(req: &VerifyRequest) -> Result<VerifyResult> {
     })
 }
 
-fn extract_payline_symbols(
-    reel_result: &[Vec<String>],
-    payline: &[usize],
-) -> Option<Vec<String>> {
+fn extract_payline_symbols(reel_result: &[Vec<String>], payline: &[usize]) -> Option<Vec<String>> {
     let mut symbols = Vec::new();
     for (reel_idx, &row_idx) in payline.iter().enumerate() {
         let symbol = reel_result.get(reel_idx)?.get(row_idx)?.clone();
@@ -359,8 +364,8 @@ mod tests {
     /// reel grid, and valid=false when the reel grid is tampered with.
     #[test]
     fn test_verify_spin_roundtrip() {
-        use sha2::{Digest, Sha256};
         use crate::models::VerifyRequest;
+        use sha2::{Digest, Sha256};
 
         let server_seed = "verify_test_server_seed_99".to_string();
         let client_seed = "verify_client_seed".to_string();
@@ -394,7 +399,10 @@ mod tests {
             rtp: 96.0,
         };
         let result = verify_spin(&verify_req).unwrap();
-        assert!(result.valid, "verify_spin should return valid=true for correct inputs");
+        assert!(
+            result.valid,
+            "verify_spin should return valid=true for correct inputs"
+        );
         assert!(result.seed_hash_matches);
         assert!(result.result_matches);
 
@@ -431,7 +439,13 @@ mod tests {
     fn test_all_wild_payline_pays() {
         // Build a reel grid where the top row is all wilds
         let wild_reel: Vec<Vec<String>> = (0..REELS)
-            .map(|_| vec!["wild".to_string(), "cherry".to_string(), "cherry".to_string()])
+            .map(|_| {
+                vec![
+                    "wild".to_string(),
+                    "cherry".to_string(),
+                    "cherry".to_string(),
+                ]
+            })
             .collect();
 
         let top_row_payline = vec![0usize; REELS]; // row 0 of every reel
@@ -439,14 +453,13 @@ mod tests {
         assert!(result.is_some(), "all-wild payline should extract symbols");
         let symbols = result.unwrap();
 
-        let (base, count) = count_leading_matches(&symbols)
-            .expect("all-wild payline should return Some");
+        let (base, count) =
+            count_leading_matches(&symbols).expect("all-wild payline should return Some");
         assert_eq!(base, "wild", "base symbol for all-wild should be 'wild'");
         assert_eq!(count, REELS, "all {REELS} wilds should match");
 
         // Payout map must have a non-zero entry for a 5-wild match (index 3)
-        let payout_map: HashMap<&str, [f64; 4]> =
-            SYMBOL_PAYOUTS.iter().cloned().collect();
+        let payout_map: HashMap<&str, [f64; 4]> = SYMBOL_PAYOUTS.iter().cloned().collect();
         let mult = payout_map["wild"][3]; // 5-match index
         assert!(mult > 0.0, "5-wild payout must be positive");
     }

@@ -1,6 +1,6 @@
 use actix_web::{
-    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     body::BoxBody,
+    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
     Error,
 };
 use std::future::{ready, Future, Ready};

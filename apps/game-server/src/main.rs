@@ -1,10 +1,10 @@
-use actix_web::{web, App, HttpServer, HttpResponse, HttpRequest, middleware};
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use dotenvy::dotenv;
 use tracing_subscriber::EnvFilter;
 
+mod auth;
 mod engine;
 mod models;
-mod auth;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -50,10 +50,7 @@ async fn health_handler() -> HttpResponse {
     }))
 }
 
-async fn spin_handler(
-    _req: HttpRequest,
-    body: web::Json<models::SpinRequest>,
-) -> HttpResponse {
+async fn spin_handler(_req: HttpRequest, body: web::Json<models::SpinRequest>) -> HttpResponse {
     match engine::process_spin(&body) {
         Ok(result) => HttpResponse::Ok().json(result),
         Err(e) => {
@@ -65,9 +62,7 @@ async fn spin_handler(
     }
 }
 
-async fn verify_handler(
-    body: web::Json<models::VerifyRequest>,
-) -> HttpResponse {
+async fn verify_handler(body: web::Json<models::VerifyRequest>) -> HttpResponse {
     match engine::verify_spin(&body) {
         Ok(result) => HttpResponse::Ok().json(result),
         Err(e) => {
