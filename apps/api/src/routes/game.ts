@@ -1,16 +1,43 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { z } from "zod";
 import { nanoid } from "nanoid";
+import { createHash } from "crypto";
 
 const SpinSchema = z.object({
   gameConfigId: z.string(),
   betAmount: z.number().positive(),
   clientSeed: z.string().min(8).max(64),
   nonce: z.number().int().nonnegative(),
+  // Optional: commitId from a prior /game/pre-commit call for proper provably-fair
+  commitId: z.string().optional(),
 });
 
 export async function gameRoutes(server: FastifyInstance) {
-  // ── POST /api/v1/game/spin ────────────────────────────────────────────────
+  // ── POST /api/v1/game/pre-commit ──────────────────────────────────────────
+  // Step 1 of provably-fair: client requests a server seed commitment BEFORE
+  // choosing their clientSeed/nonce.  The returned serverSeedHash is the
+  // SHA-256 of the serverSeed that will be used for the subsequent spin.
+  server.get(
+    "/pre-commit",
+    { preHandler: [server.authenticate] },
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const userId = (req.user as { sub: string }).sub;
+      const serverSeed = nanoid(32);
+      const serverSeedHash = createHash("sha256")
+        .update(serverSeed)
+        .digest("hex");
+      const commitId = nanoid(16);
+
+      // Store with 5-minute TTL; each commitId is single-use
+      await server.redis.setex(
+        `spin:commit:${userId}:${commitId}`,
+        300,
+        serverSeed
+      );
+
+      return reply.send({ commitId, serverSeedHash });
+    }
+  );
   server.post(
     "/spin",
     {
@@ -24,7 +51,8 @@ export async function gameRoutes(server: FastifyInstance) {
       }
 
       const userId = (req.user as { sub: string }).sub;
-      const { gameConfigId, betAmount, clientSeed, nonce } = body.data;
+      const { gameConfigId, betAmount, clientSeed, nonce, commitId } =
+        body.data;
 
       // Replay attack prevention – nonce+clientSeed must be unique per user
       const replayKey = `${userId}:${clientSeed}:${nonce}`;
@@ -37,8 +65,8 @@ export async function gameRoutes(server: FastifyInstance) {
         return reply.status(409).send({ error: "Duplicate spin detected." });
       }
 
-      // Fetch game config
-      const gameConfig = await server.prisma.gameConfig.findUnique({
+      // Fetch game config – findFirst because isActive is not a @unique field
+      const gameConfig = await server.prisma.gameConfig.findFirst({
         where: { id: gameConfigId, isActive: true },
       });
       if (!gameConfig) {
@@ -63,12 +91,27 @@ export async function gameRoutes(server: FastifyInstance) {
         return reply.status(402).send({ error: "Insufficient balance." });
       }
 
-      // Server seed for provably fair RNG
-      const serverSeed = nanoid(32);
-      const { createHash } = await import("crypto");
-      const serverSeedHash = createHash("sha256")
-        .update(serverSeed)
-        .digest("hex");
+      // Server seed for provably fair RNG.
+      // If the client supplied a commitId from a prior /game/pre-commit call,
+      // use the pre-committed serverSeed (proper two-step protocol).
+      // Otherwise, fall back to generating a new seed inline (legacy mode).
+      let serverSeed: string;
+      let serverSeedHash: string;
+
+      if (commitId) {
+        const commitKey = `spin:commit:${userId}:${commitId}`;
+        const committed = await server.redis.getdel(commitKey);
+        if (!committed) {
+          return reply.status(400).send({
+            error: "Invalid or expired commitId. Request a new one from /game/pre-commit.",
+          });
+        }
+        serverSeed = committed;
+        serverSeedHash = createHash("sha256").update(serverSeed).digest("hex");
+      } else {
+        serverSeed = nanoid(32);
+        serverSeedHash = createHash("sha256").update(serverSeed).digest("hex");
+      }
 
       // Call Rust game server for deterministic result
       const gameServerUrl =

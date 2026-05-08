@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,7 +32,7 @@ func main() {
 	defer logger.Sync()
 
 	rdb := redis.NewClient(&redis.Options{
-		Addr: getEnv("REDIS_URL", "localhost:6379"),
+		Addr: parseRedisAddr(getEnv("REDIS_URL", "localhost:6379")),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -255,4 +257,16 @@ func getEnv(key, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+// parseRedisAddr accepts both "redis://host:port[/db]" URL format and plain
+// "host:port" address strings, returning a host:port suitable for go-redis.
+func parseRedisAddr(redisURL string) string {
+	if strings.HasPrefix(redisURL, "redis://") || strings.HasPrefix(redisURL, "rediss://") {
+		u, err := url.Parse(redisURL)
+		if err == nil && u.Host != "" {
+			return u.Host
+		}
+	}
+	return redisURL
 }

@@ -34,15 +34,21 @@ pub struct WinningLine {
     pub amount: f64,
 }
 
+/// All fields needed to deterministically recompute a past spin for verification.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub struct VerifyRequest {
     pub server_seed: String,
     pub client_seed: String,
     pub nonce: u64,
     pub server_seed_hash: String,
+    /// The reel grid as stored after the original spin.
     pub reel_result: Vec<Vec<String>>,
+    /// Must match the original spin parameters exactly.
+    pub symbol_weights: HashMap<String, u32>,
+    pub paylines: Vec<Vec<usize>>,
+    pub bet_amount: f64,
+    pub rtp: f64,
 }
 
 #[derive(Debug, Serialize)]

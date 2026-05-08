@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: scatterx/api:latest
+          image: ghcr.io/cuber-ai/scatterx-api:latest
           ports:
             - containerPort: 3001
           env:

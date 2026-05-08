@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: game-server
-          image: scatterx/game-server:latest
+          image: ghcr.io/cuber-ai/scatterx-game-server:latest
           ports:
             - containerPort: 9001
           env:
@@ -77,7 +77,7 @@ spec:
     spec:
       containers:
         - name: jackpot-service
-          image: scatterx/jackpot-service:latest
+          image: ghcr.io/cuber-ai/scatterx-jackpot-service:latest
           ports:
             - containerPort: 9000
           env:

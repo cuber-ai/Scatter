@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { FastifyRequest, FastifyReply } from "fastify";
 import fastifyCors from "@fastify/cors";
 import fastifyHelmet from "@fastify/helmet";
 import fastifyJwt from "@fastify/jwt";
@@ -17,6 +17,15 @@ import { rewardRoutes } from "./routes/rewards.js";
 import { healthRoutes } from "./routes/health.js";
 import { prismaPlugin } from "./plugins/prisma.js";
 import { redisPlugin } from "./plugins/redis.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    authenticate: (
+      request: FastifyRequest,
+      reply: FastifyReply
+    ) => Promise<void>;
+  }
+}
 
 const server = Fastify({
   logger: {
@@ -75,6 +84,19 @@ async function bootstrap() {
   });
 
   await server.register(fastifyCookie);
+
+  // ── Authenticate decorator ────────────────────────────────────────────────
+  // Registered here so all route plugins can reference server.authenticate.
+  server.decorate(
+    "authenticate",
+    async function (request: FastifyRequest, reply: FastifyReply) {
+      try {
+        await request.jwtVerify();
+      } catch {
+        reply.status(401).send({ error: "Unauthorized" });
+      }
+    }
+  );
 
   // ── Database + Cache ──────────────────────────────────────────────────────
   await server.register(prismaPlugin);

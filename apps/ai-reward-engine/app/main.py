@@ -20,6 +20,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 API_KEY = os.getenv("AI_ENGINE_API_KEY", "")
+IS_PRODUCTION = os.getenv("ENVIRONMENT", "development").lower() == "production"
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 scorer: Optional[PlayerScorer] = None
@@ -58,7 +59,15 @@ Instrumentator().instrument(app).expose(app)
 
 def verify_api_key(key: str = Security(api_key_header)) -> str:
     if not API_KEY:
-        return key  # Unauthenticated in dev
+        if IS_PRODUCTION:
+            # In production, a missing API key is a misconfiguration – fail closed.
+            raise HTTPException(
+                status_code=503,
+                detail="Service not properly configured: AI_ENGINE_API_KEY is not set",
+            )
+        # In non-production environments allow unauthenticated access to ease
+        # local development.  Set ENVIRONMENT=production to enforce auth.
+        return key or ""
     if key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return key

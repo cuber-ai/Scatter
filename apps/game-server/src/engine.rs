@@ -36,10 +36,14 @@ fn derive_seed(server_seed: &str, client_seed: &str, nonce: u64) -> [u8; 32] {
     seed
 }
 
-/// Build a weighted symbol pool from the provided weights
+/// Build a weighted symbol pool from the provided weights.
+/// Sorts by symbol name to ensure deterministic pool order regardless of
+/// HashMap iteration order (which is not guaranteed to be stable).
 fn build_symbol_pool(weights: &HashMap<String, u32>) -> Vec<String> {
     let mut pool = Vec::new();
-    for (symbol, &weight) in weights {
+    let mut entries: Vec<(&String, &u32)> = weights.iter().collect();
+    entries.sort_by_key(|(name, _)| name.as_str());
+    for (symbol, &weight) in entries {
         for _ in 0..weight {
             pool.push(symbol.clone());
         }
@@ -150,21 +154,38 @@ pub fn process_spin(req: &SpinRequest) -> Result<SpinResult> {
     })
 }
 
-/// Verify a past spin result for provably fair validation
+/// Verify a past spin result for provably fair validation.
+/// Re-derives the PRNG seed, re-runs the spin deterministically, and compares
+/// the recomputed reel grid against the one provided by the client.
 pub fn verify_spin(req: &VerifyRequest) -> Result<VerifyResult> {
-    // Verify server seed hash
+    // 1. Verify that SHA-256(serverSeed) matches the pre-committed hash.
     let mut hasher = Sha256::new();
     hasher.update(req.server_seed.as_bytes());
     let computed_hash = hex::encode(hasher.finalize());
     let seed_hash_matches = computed_hash == req.server_seed_hash;
 
-    // Re-derive seed and re-spin to verify result
-    // (In a real verify endpoint, we'd rebuild the spin and compare)
-    let seed = derive_seed(&req.server_seed, &req.client_seed, req.nonce);
-    let rng = ChaCha20Rng::from_seed(seed);
+    if !seed_hash_matches {
+        return Ok(VerifyResult {
+            valid: false,
+            seed_hash_matches: false,
+            result_matches: false,
+        });
+    }
 
-    // Simple validation: check that the seed produces consistent results
-    let result_matches = seed_hash_matches && !rng.get_word_pos().is_power_of_two(); // placeholder check
+    // 2. Recompute the spin deterministically from the same inputs.
+    let spin_req = crate::models::SpinRequest {
+        server_seed: req.server_seed.clone(),
+        client_seed: req.client_seed.clone(),
+        nonce: req.nonce,
+        bet_amount: req.bet_amount,
+        symbol_weights: req.symbol_weights.clone(),
+        paylines: req.paylines.clone(),
+        rtp: req.rtp,
+    };
+    let recomputed = process_spin(&spin_req)?;
+
+    // 3. Compare the recomputed reel grid against the stored result.
+    let result_matches = recomputed.reel_result == req.reel_result;
 
     Ok(VerifyResult {
         valid: seed_hash_matches && result_matches,
@@ -185,17 +206,29 @@ fn extract_payline_symbols(
     Some(symbols)
 }
 
-/// Count leading matching symbols on a payline (wilds count as any symbol)
+/// Count leading matching symbols on a payline (wilds count as any symbol).
+/// Returns `(base_symbol, count)` or `None` if the slice is empty.
+/// An all-wild payline uses "wild" as the base symbol so it earns wild payouts.
 fn count_leading_matches(symbols: &[String]) -> Option<(String, usize)> {
     if symbols.is_empty() {
         return None;
     }
-    let first_non_wild = symbols.iter().find(|s| s.as_str() != "wild")?;
-    let base_symbol = first_non_wild.clone();
+    // Find the first non-wild symbol to use as the base.
+    // If all symbols are wild the base is "wild" itself.
+    let base_symbol = symbols
+        .iter()
+        .find(|s| s.as_str() != "wild")
+        .cloned()
+        .unwrap_or_else(|| "wild".to_string());
+
     let count = symbols
         .iter()
         .take_while(|s| s.as_str() == "wild" || *s == &base_symbol)
         .count();
+
+    if count == 0 {
+        return None;
+    }
     Some((base_symbol, count))
 }
 
@@ -218,11 +251,14 @@ mod tests {
         w
     }
 
+    /// Each payline is a Vec of ROWS row-indices (0..ROWS-1), one per reel.
     fn default_paylines() -> Vec<Vec<usize>> {
         vec![
-            vec![0, 1, 2, 3, 4],
-            vec![1, 1, 1, 1, 1],
-            vec![2, 1, 0, 1, 2],
+            vec![0, 0, 0, 0, 0], // top row across all reels
+            vec![1, 1, 1, 1, 1], // middle row
+            vec![2, 2, 2, 2, 2], // bottom row
+            vec![0, 1, 2, 1, 0], // V shape
+            vec![2, 1, 0, 1, 2], // inverted V
         ]
     }
 
@@ -297,5 +333,121 @@ mod tests {
         let result = process_spin(&req).unwrap();
         assert!(result.win_amount >= 0.0);
         assert!(result.multiplier >= 0.0);
+    }
+
+    /// All payline row indices must be within 0..ROWS-1; otherwise
+    /// extract_payline_symbols silently drops the payline.
+    #[test]
+    fn test_payline_row_indices_in_range() {
+        for (i, payline) in default_paylines().iter().enumerate() {
+            assert_eq!(
+                payline.len(),
+                REELS,
+                "payline {i}: expected {REELS} entries, got {}",
+                payline.len()
+            );
+            for &row_idx in payline {
+                assert!(
+                    row_idx < ROWS,
+                    "payline {i}: row_idx {row_idx} is out of range 0..{ROWS}"
+                );
+            }
+        }
+    }
+
+    /// verify_spin must return valid=true when given the original seed + same
+    /// reel grid, and valid=false when the reel grid is tampered with.
+    #[test]
+    fn test_verify_spin_roundtrip() {
+        use sha2::{Digest, Sha256};
+        use crate::models::VerifyRequest;
+
+        let server_seed = "verify_test_server_seed_99".to_string();
+        let client_seed = "verify_client_seed".to_string();
+        let nonce: u64 = 7;
+
+        let spin_req = SpinRequest {
+            server_seed: server_seed.clone(),
+            client_seed: client_seed.clone(),
+            nonce,
+            bet_amount: 50.0,
+            symbol_weights: default_weights(),
+            paylines: default_paylines(),
+            rtp: 96.0,
+        };
+        let spin_result = process_spin(&spin_req).unwrap();
+
+        let mut hasher = Sha256::new();
+        hasher.update(server_seed.as_bytes());
+        let server_seed_hash = hex::encode(hasher.finalize());
+
+        // 1. Valid verification
+        let verify_req = VerifyRequest {
+            server_seed: server_seed.clone(),
+            client_seed: client_seed.clone(),
+            nonce,
+            server_seed_hash: server_seed_hash.clone(),
+            reel_result: spin_result.reel_result.clone(),
+            symbol_weights: default_weights(),
+            paylines: default_paylines(),
+            bet_amount: 50.0,
+            rtp: 96.0,
+        };
+        let result = verify_spin(&verify_req).unwrap();
+        assert!(result.valid, "verify_spin should return valid=true for correct inputs");
+        assert!(result.seed_hash_matches);
+        assert!(result.result_matches);
+
+        // 2. Tampered reel grid → result_matches must be false.
+        // We use "invalid_symbol" which cannot appear in any real spin (it is not
+        // in the symbol pool), so the comparison is guaranteed to differ.
+        let impossible_reels: Vec<Vec<String>> = (0..REELS)
+            .map(|_| vec!["invalid_symbol".to_string(); ROWS])
+            .collect();
+        let tampered_req = VerifyRequest {
+            server_seed: server_seed.clone(),
+            client_seed: client_seed.clone(),
+            nonce,
+            server_seed_hash: server_seed_hash.clone(),
+            reel_result: impossible_reels,
+            symbol_weights: default_weights(),
+            paylines: default_paylines(),
+            bet_amount: 50.0,
+            rtp: 96.0,
+        };
+        let tampered_result = verify_spin(&tampered_req).unwrap();
+        assert!(
+            !tampered_result.result_matches,
+            "verify_spin should detect mismatched reel result"
+        );
+        assert!(
+            !tampered_result.valid,
+            "verify_spin should return valid=false when reel result does not match"
+        );
+    }
+
+    /// An all-wild payline must pay wild payouts, not zero.
+    #[test]
+    fn test_all_wild_payline_pays() {
+        // Build a reel grid where the top row is all wilds
+        let wild_reel: Vec<Vec<String>> = (0..REELS)
+            .map(|_| vec!["wild".to_string(), "cherry".to_string(), "cherry".to_string()])
+            .collect();
+
+        let top_row_payline = vec![0usize; REELS]; // row 0 of every reel
+        let result = extract_payline_symbols(&wild_reel, &top_row_payline);
+        assert!(result.is_some(), "all-wild payline should extract symbols");
+        let symbols = result.unwrap();
+
+        let (base, count) = count_leading_matches(&symbols)
+            .expect("all-wild payline should return Some");
+        assert_eq!(base, "wild", "base symbol for all-wild should be 'wild'");
+        assert_eq!(count, REELS, "all {REELS} wilds should match");
+
+        // Payout map must have a non-zero entry for a 5-wild match (index 3)
+        let payout_map: HashMap<&str, [f64; 4]> =
+            SYMBOL_PAYOUTS.iter().cloned().collect();
+        let mult = payout_map["wild"][3]; // 5-match index
+        assert!(mult > 0.0, "5-wild payout must be positive");
     }
 }

@@ -44,6 +44,22 @@ describe("CSRF tokens", () => {
   it("rejects empty tokens", () => {
     expect(validateCsrfToken("", "")).toBe(false);
   });
+
+  it("rejects non-hex tokens of correct length", () => {
+    // 64 chars but containing non-hex characters — must not pass
+    const nonHex = "zz".repeat(32); // 64 chars, invalid hex
+    const valid = generateCsrfToken();
+    expect(validateCsrfToken(nonHex, valid)).toBe(false);
+    expect(validateCsrfToken(valid, nonHex)).toBe(false);
+    // Two identical non-hex strings of correct length must also fail
+    expect(validateCsrfToken(nonHex, nonHex)).toBe(false);
+  });
+
+  it("rejects tokens with wrong length", () => {
+    const short = generateCsrfToken().slice(0, 32); // 32 chars, not 64
+    const valid = generateCsrfToken();
+    expect(validateCsrfToken(short, valid)).toBe(false);
+  });
 });
 
 describe("RateLimiter", () => {

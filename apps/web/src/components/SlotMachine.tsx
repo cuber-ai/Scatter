@@ -53,12 +53,14 @@ export default function SlotMachine() {
     clientNonce.current += 1;
 
     try {
-      const result = await apiClient.post<SpinResult>("/game/spin", {
+      // apiClient's response interceptor unwraps .data, so the resolved value
+      // is already SpinResult – cast accordingly.
+      const result = (await apiClient.post("/game/spin", {
         gameConfigId,
         betAmount,
         clientSeed,
         nonce: clientNonce.current,
-      });
+      })) as unknown as SpinResult;
 
       setReels(result.reelResult as Reel);
       setLastResult(result);

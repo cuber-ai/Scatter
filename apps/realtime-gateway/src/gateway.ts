@@ -3,6 +3,7 @@ import fastifyCors from "@fastify/cors";
 import { Server as SocketServer } from "socket.io";
 import { createServer } from "http";
 import Redis from "ioredis";
+import jwt from "jsonwebtoken";
 
 const fastify = Fastify({ logger: true });
 const httpServer = createServer(fastify.server);
@@ -18,8 +19,14 @@ const io = new SocketServer(httpServer, {
   transports: ["websocket", "polling"],
 });
 
+const jwtSecret = process.env.JWT_SECRET;
+if (!jwtSecret) {
+  console.error("JWT_SECRET environment variable is required");
+  process.exit(1);
+}
+
 // ── JWT Auth middleware ───────────────────────────────────────────────────────
-io.use(async (socket, next) => {
+io.use((socket, next) => {
   const token =
     (socket.handshake.auth?.token as string) ||
     (socket.handshake.headers?.authorization?.replace("Bearer ", "") ?? "");
@@ -29,27 +36,22 @@ io.use(async (socket, next) => {
   }
 
   try {
-    // Validate JWT – decode without library for minimal deps
-    const [, payloadB64] = token.split(".");
-    const payload = JSON.parse(
-      Buffer.from(payloadB64, "base64url").toString("utf8")
-    );
-
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-      return next(new Error("Token expired"));
-    }
-
-    socket.data.userId = payload.sub as string;
-    socket.data.role = payload.role as string;
+    // Verify the full JWT signature – rejects tampered or expired tokens.
+    const payload = jwt.verify(token, jwtSecret) as jwt.JwtPayload & {
+      sub: string;
+      role: string;
+    };
+    socket.data.userId = payload.sub;
+    socket.data.role = payload.role;
     next();
   } catch {
-    return next(new Error("Invalid token"));
+    return next(new Error("Invalid or expired token"));
   }
 });
 
 // ── Connection handlers ───────────────────────────────────────────────────────
 io.on("connection", (socket) => {
-  const { userId, role } = socket.data;
+  const { userId, role } = socket.data as { userId: string; role: string };
   fastify.log.info({ userId }, "Socket connected");
 
   // Join user-specific room
@@ -60,15 +62,19 @@ io.on("connection", (socket) => {
     socket.join("admin");
   }
 
+  // Rate limit: max 2 messages/sec from client.
+  // Store the handle so it can be cleared when the socket disconnects.
+  let msgCount = 0;
+  const rateLimitInterval = setInterval(() => {
+    msgCount = 0;
+  }, 1000);
+
   socket.on("disconnect", () => {
+    clearInterval(rateLimitInterval);
     fastify.log.info({ userId }, "Socket disconnected");
   });
 
-  // Rate limit: max 2 messages/sec from client
-  let msgCount = 0;
-  setInterval(() => { msgCount = 0; }, 1000);
-
-  socket.onAny((event) => {
+  socket.onAny((_event) => {
     msgCount++;
     if (msgCount > 2) {
       socket.emit("error", { message: "Rate limit exceeded" });

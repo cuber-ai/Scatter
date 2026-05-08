@@ -10,7 +10,14 @@ const RegisterSchema = z.object({
     .min(3)
     .max(30)
     .regex(/^[a-zA-Z0-9_]+$/),
-  password: z.string().min(8).max(128),
+  password: z
+    .string()
+    .min(12, "Password must be at least 12 characters")
+    .max(128)
+    .regex(/[A-Z]/, "Must contain an uppercase letter")
+    .regex(/[a-z]/, "Must contain a lowercase letter")
+    .regex(/[0-9]/, "Must contain a digit")
+    .regex(/[^A-Za-z0-9]/, "Must contain a special character"),
   referralCode: z.string().optional(),
 });
 
