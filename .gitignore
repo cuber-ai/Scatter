@@ -59,7 +59,10 @@ infrastructure/terraform/*.tfstate.backup
 apps/windows-client/dist/
 apps/windows-client/out/
 
-# Python virtualenv
+# Go build output
+apps/jackpot-service/main
+apps/jackpot-service/jackpot-service
+
 apps/ai-reward-engine/.venv/
 apps/ai-reward-engine/__pycache__/
 
