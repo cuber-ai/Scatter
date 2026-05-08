@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p 3003",
     "lint": "next lint",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "next": "15.1.3",
