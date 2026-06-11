@@ -203,7 +203,7 @@ export async function adminRoutes(server: FastifyInstance) {
 
       // Enrich with live Redis amounts
       const enriched = await Promise.all(
-        pools.map(async (pool) => {
+        pools.map(async (pool: (typeof pools)[number]) => {
           const live = await server.redis.get(`jackpot:${pool.tier}`);
           return { ...pool, liveAmount: live ? Number(live) : Number(pool.currentAmount) };
         })
